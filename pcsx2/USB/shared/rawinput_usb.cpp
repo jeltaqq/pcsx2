@@ -33,7 +33,6 @@ namespace shared
 		HWND msgWindow = nullptr;
 		WNDPROC eatenWndProc = nullptr;
 		HWND eatenWnd = nullptr;
-		HHOOK hHook = nullptr, hHookWnd = nullptr, hHookKB = nullptr;
 		bool skipInput = false;
 		std::mutex cb_mutex;
 
@@ -145,26 +144,6 @@ namespace shared
 			return 1;
 		}
 
-		static LRESULT CALLBACK MyWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
-		{
-			switch (uMsg)
-			{
-				case WM_ACTIVATE:
-					Console.WriteLn("******      WM_ACTIVATE        ****** %p %d\n", hWnd, LOWORD(wParam) != WA_INACTIVE);
-					skipInput = LOWORD(wParam) == WA_INACTIVE;
-					break;
-				case WM_SETFOCUS:
-					Console.WriteLn("******      WM_SETFOCUS        ****** %p\n", hWnd);
-					skipInput = false;
-					break;
-				case WM_KILLFOCUS:
-					Console.WriteLn("******      WM_KILLFOCUS        ****** %p\n", hWnd);
-					skipInput = true;
-					break;
-			}
-			return 0;
-		}
-
 		static LRESULT CALLBACK RawInputProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		{
 			PRAWINPUT pRawInput;
@@ -201,6 +180,9 @@ namespace shared
 					free(pRawInput);
 					break;
 				}
+				case WM_ENABLE:
+					skipInput = !wParam;
+					break;
 				case WM_ACTIVATE:
 					Console.WriteLn("******      WM_ACTIVATE        ****** %p %d\n", hWnd, LOWORD(wParam) != WA_INACTIVE);
 					skipInput = LOWORD(wParam) == WA_INACTIVE;
@@ -233,67 +215,28 @@ namespace shared
 			return 0;
 		}
 
-		static LRESULT CALLBACK HookProc(INT code, WPARAM wParam, LPARAM lParam)
-		{
-			MSG* msg = reinterpret_cast<MSG*>(lParam);
-
-			//Console.Warning("hook: %d, %d, %d\n", code, wParam, lParam);
-			if (code == HC_ACTION)
-				RawInputProc(msg->hwnd, msg->message, msg->wParam, msg->lParam);
-			return CallNextHookEx(hHook, code, wParam, lParam);
-		}
-
-		static LRESULT CALLBACK HookWndProc(INT code, WPARAM wParam, LPARAM lParam)
-		{
-			MSG* msg = reinterpret_cast<MSG*>(lParam);
-
-			//Console.Warning("hook: %d, %d, %d\n", code, wParam, lParam);
-			if (code == HC_ACTION)
-				MyWndProc(msg->hwnd, msg->message, msg->wParam, msg->lParam);
-			return CallNextHookEx(hHookWnd, code, wParam, lParam);
-		}
-
-		static LRESULT CALLBACK KBHookProc(INT code, WPARAM wParam, LPARAM lParam)
-		{
-			Console.Warning("kb hook: %d, %zd, %zd\n", code, wParam, lParam);
-			KBDLLHOOKSTRUCT* kb = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
-			//if(code == HC_ACTION)
-			//	RawInputProc(msg->hwnd, msg->message, msg->wParam, msg->lParam);
-			return CallNextHookEx(0, code, wParam, lParam);
-		}
-
 		int Initialize(void* ptr)
 		{
+			// Reinitialized without USBclose, like when disc swapping
+			if (eatenWndProc)
+				return 1;
+
 			HWND hWnd = reinterpret_cast<HWND>(ptr);
 			if (!InitHid())
 				return 0;
 
-#if 0
-	if (!RegisterRaw(hWnd))
-		return 0;
-	hHook = SetWindowsHookEx(WH_GETMESSAGE, HookProc, hInst, 0);
-	//hHookWnd = SetWindowsHookEx(WH_CALLWNDPROC, HookWndProc, hInst, 0);
-	//hHookKB = SetWindowsHookEx(WH_KEYBOARD_LL, KBHookProc, hInst, 0);
-	//int err = GetLastError();
-#else
 			eatenWnd = hWnd;
 			eatenWndProc = (WNDPROC)SetWindowLongPtr(hWnd, GWLP_WNDPROC, (LONG_PTR)RawInputProc);
 			RegisterRaw(hWnd);
-#endif
+
 			return 1;
 		}
 
 		void Uninitialize()
 		{
-			if (hHook)
-			{
-				UnhookWindowsHookEx(hHook);
-				//UnhookWindowsHookEx(hHookKB);
-				hHook = 0;
-			}
 			if (eatenWnd)
 				RegisterRaw(nullptr);
-			if (eatenWnd && eatenWndProc)
+			if (eatenWnd && eatenWndProc && GetWindowLongPtr(eatenWnd, GWLP_WNDPROC) == (LONG_PTR)RawInputProc)
 				SetWindowLongPtr(eatenWnd, GWLP_WNDPROC, (LONG_PTR)eatenWndProc);
 			eatenWndProc = nullptr;
 			eatenWnd = nullptr;
